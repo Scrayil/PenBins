@@ -79,17 +79,13 @@ func extractCVEs(contentReader io.Reader) ([]CVE, error) {
 	return nil, err
 }
 
-func getPreviousResults(tmpPrevResultsPath string, keywords []string) []CVE {
-	if len(keywords) > 1 {
-		keywords = []string{strings.Join(keywords[:], "_")}
-	}
-	keywords[0] = strings.Replace(strings.Replace(keywords[0], "/", "_", -1), "\\", "_", -1)
+func getPreviousResults(tmpPrevResultsPath string) []CVE {
 	_, err := os.Stat(tmpPrevResultsPath)
 	if err == nil {
 		var choice string
 		fmt.Print("Previous results found! Do you want to ignore them? [y/n (default)]: ")
 		_, _ = fmt.Scanln(&choice)
-		if len(choice) == 0 || strings.ToLower(strings.TrimSpace(choice)) != "y" {
+		if strings.ToLower(strings.TrimSpace(choice)) != "y" { // len(choice) == 0 ||
 			var jsonFile *os.File
 			jsonFile, err = os.Open(tmpPrevResultsPath)
 			if err == nil {
@@ -106,7 +102,6 @@ func getPreviousResults(tmpPrevResultsPath string, keywords []string) []CVE {
 }
 
 func combineCVEs(resultChan *chan []CVE, cveList *[]CVE) {
-	var seenCVEs []string
 	for result := range *resultChan {
 		for _, currCVE := range result {
 			duplicate := false
@@ -119,9 +114,23 @@ func combineCVEs(resultChan *chan []CVE, cveList *[]CVE) {
 			if duplicate {
 				continue
 			}
-			seenCVEs = append(seenCVEs, currCVE.Name)
 			*cveList = append(*cveList, currCVE)
 		}
+	}
+}
+
+func parallelFetch(wg *sync.WaitGroup, key string, resultChan *chan []CVE) {
+	defer wg.Done()
+	contentReader, err := sendRequest(fmt.Sprintf("https://cve.mitre.org/cgi-bin/cvekey.cgi?keyword=%s", key))
+	if err == nil {
+		var currCVEs []CVE
+		currCVEs, err = extractCVEs(contentReader)
+		if err == nil {
+			*resultChan <- currCVEs
+		}
+	}
+	if err != nil {
+		fmt.Println(err)
 	}
 }
 
@@ -133,7 +142,7 @@ func getCVEs(splitKeys bool, keywords []string, filter string, force, reverseSor
 	filename := strings.Replace(strings.Replace(strings.Join(keywords[:], " "), "/", "_", -1), " ", "_", -1)
 	tmpPrevResultsPath := fmt.Sprintf("%s%c%s%c%s.json", os.TempDir(), os.PathSeparator, "tmpPrevCveResults", os.PathSeparator, filename)
 	if !force {
-		cveList = getPreviousResults(tmpPrevResultsPath, keywords)
+		cveList = getPreviousResults(tmpPrevResultsPath) // keywords
 	}
 	if len(cveList) == 0 {
 		fmt.Println("Retrieving CVEs...")
@@ -141,20 +150,7 @@ func getCVEs(splitKeys bool, keywords []string, filter string, force, reverseSor
 		resultChan := make(chan []CVE, len(keywords))
 		for _, key := range keywords {
 			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				contentReader, err := sendRequest(fmt.Sprintf("https://cve.mitre.org/cgi-bin/cvekey.cgi?keyword=%s", key))
-				if err == nil {
-					var currCVEs []CVE
-					currCVEs, err = extractCVEs(contentReader)
-					if err == nil {
-						resultChan <- currCVEs
-					}
-				}
-				if err != nil {
-					fmt.Println(err)
-				}
-			}()
+			go parallelFetch(&wg, key, &resultChan)
 		}
 		wg.Wait()
 		close(resultChan)
