@@ -12,5 +12,7 @@ cve [OPTIONS] k1 k2 k3...
   -s    splits keys into multiple queries
 ```
 
-## Results
+## Example
+`go run cve.go -force prestashop 1.7`  
+
 ![CVE demo image](../shared/gimgs/cve.png)  
